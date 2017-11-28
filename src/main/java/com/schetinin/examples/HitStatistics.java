@@ -7,34 +7,65 @@ import java.util.Date;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Created by Юрий on 15.11.2017.
+ * Class for counting hits
  */
 public class HitStatistics {
 
     private static class PeriodInfo{
-        final Period period;
-        final AtomicInteger counter = new AtomicInteger(0);
-        private AtomicReference<Date> nextPeriodDate;
+        private static class CurrValues{
+            final private AtomicInteger counter = new AtomicInteger(0);
+            final private Date nextPeriodDate;
 
-        public void clearIfExpired(){
+            CurrValues(Date nextPeriodDate) {
+                this.nextPeriodDate = nextPeriodDate;
+            }
+
+            int getCount() {
+                return counter.get();
+            }
+
+            Date getNextPeriodDate() {
+                return nextPeriodDate;
+            }
+
+            void inc(){
+                counter.incrementAndGet();
+            }
+        }
+        final private Period period;
+        private volatile CurrValues currValues;
+
+
+
+        private PeriodInfo(Period period, Date now) {
+            this.period = period;
+            setNext(now);
+        }
+
+        private void clearIfExpired(){
             Date now = new Date();
             //If period expired, then clear stat
-            if(!now.before(nextPeriodDate.get())){
-                counter.set(0);
-                nextPeriodDate.set(getNextPeriodDate(now));
+            if(!now.before(currValues.getNextPeriodDate())){
+                setNext(now);
             }
         }
 
-        public PeriodInfo(Period period) {
-            this.period = period;
-            nextPeriodDate = new AtomicReference<>(getNextPeriodDate());
+        private void setNext(Date now){
+            currValues = new CurrValues(getNextPeriodDate(now));
         }
 
-        private Date getNextPeriodDate(){
-            return getNextPeriodDate(new Date());
+        private void inc(){
+            currValues.inc();
+        }
+
+        private int getCount(){
+            return currValues.getCount();
+        }
+
+        private PeriodInfo(Period period) {
+            this(period, new Date());
         }
 
         private Date getNextPeriodDate(Date date){
@@ -56,13 +87,13 @@ public class HitStatistics {
         }
 
         int calendarPeriod;
-    };
+    }
 
     private Map<Period,PeriodInfo> stats;
 
 
     private HitStatistics() {
-        stats = new ConcurrentHashMap<Period,PeriodInfo>(Period.values().length);
+        stats = new ConcurrentHashMap<>(Period.values().length);
         for (Period period : Period.values()) {
             stats.put(period,new PeriodInfo(period));
         }
@@ -76,20 +107,25 @@ public class HitStatistics {
 
     public void hit(){
         for (Period period : Period.values()) {
-            prepare(period);
-            stats.get(period).counter.incrementAndGet();
+            prepare(period).inc();
         }
 
     }
 
     public int getCountPerPeriod(Period period){
-        prepare(period);
-        return stats.get(period).counter.intValue();
+        return prepare(period).getCount();
     }
 
-    private void prepare(Period period){
+    void clearPeriodManually(Period period){
+        PeriodInfo info = stats.get(period);
+        info.setNext(new Date());
+
+    }
+
+    private PeriodInfo prepare(Period period){
         PeriodInfo info = stats.get(period);
         info.clearIfExpired();
+        return info;
     }
 
 }
